@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeEach } from "bun:test"
 import { Hono } from "hono"
 import { telemetryStore, createTelemetryRoutes, renderPrometheusMetrics } from "../telemetry"
-import type { RequestMetric } from "../telemetry"
+import type { RequestMetric, TelemetrySummary } from "../telemetry"
 
 function makeMetric(overrides: Partial<RequestMetric> = {}): RequestMetric {
   return {
@@ -27,6 +27,14 @@ function makeMetric(overrides: Partial<RequestMetric> = {}): RequestMetric {
     cacheHitRate: 0.89,
     ...overrides,
   }
+}
+
+/** The envelope the routes answer a rejected param with. Declared rather than
+ *  reached for through `any` so a change to the error shape fails typecheck
+ *  here instead of quietly making these assertions unreachable. */
+interface ErrorBody {
+  type: string
+  error: { type: string; message: string }
 }
 
 describe("Telemetry routes", () => {
@@ -217,7 +225,7 @@ describe("Telemetry route param validation", () => {
 
     const res = await app.fetch(new Request("http://localhost/telemetry/summary?window=1h"))
     expect(res.status).toBe(200)
-    const body = await res.json() as any
+    const body = await res.json() as TelemetrySummary
     expect(body.totalRequests).toBe(1) // Number.parseInt("1h") === 1 would report 0
   })
 
@@ -226,7 +234,7 @@ describe("Telemetry route param validation", () => {
     telemetryStore.record(makeMetric({ timestamp: Date.now() }))
 
     const res = await app.fetch(new Request("http://localhost/telemetry/summary?window=60s"))
-    const body = await res.json() as any
+    const body = await res.json() as TelemetrySummary
     expect(body.totalRequests).toBe(1)
   })
 
@@ -235,7 +243,7 @@ describe("Telemetry route param validation", () => {
     telemetryStore.record(makeMetric({ timestamp: Date.now() - 80_000 }))
 
     const res = await app.fetch(new Request("http://localhost/telemetry/summary?window=1.5m"))
-    const body = await res.json() as any
+    const body = await res.json() as TelemetrySummary
     expect(body.totalRequests).toBe(1) // 90s window
   })
 
@@ -244,7 +252,7 @@ describe("Telemetry route param validation", () => {
     telemetryStore.record(makeMetric({ timestamp: Date.now() }))
 
     const res = await app.fetch(new Request("http://localhost/telemetry/summary?window=60000"))
-    const body = await res.json() as any
+    const body = await res.json() as TelemetrySummary
     expect(body.totalRequests).toBe(1)
   })
 
@@ -253,7 +261,7 @@ describe("Telemetry route param validation", () => {
 
     const res = await app.fetch(new Request("http://localhost/telemetry/summary?window=abc"))
     expect(res.status).toBe(400)
-    const body = await res.json() as any
+    const body = await res.json() as ErrorBody
     expect(body.error.type).toBe("invalid_request_error")
     expect(body.error.message).toContain("window")
   })
@@ -271,11 +279,11 @@ describe("Telemetry route param validation", () => {
 
     const absent = await app.fetch(new Request("http://localhost/telemetry/summary"))
     expect(absent.status).toBe(200)
-    expect((await absent.json() as any).totalRequests).toBe(1)
+    expect((await absent.json() as TelemetrySummary).totalRequests).toBe(1)
 
     const empty = await app.fetch(new Request("http://localhost/telemetry/summary?window="))
     expect(empty.status).toBe(200)
-    expect((await empty.json() as any).totalRequests).toBe(1)
+    expect((await empty.json() as TelemetrySummary).totalRequests).toBe(1)
   })
 
   it("rejects an unparseable limit rather than returning an empty list", async () => {
@@ -283,7 +291,7 @@ describe("Telemetry route param validation", () => {
 
     const res = await app.fetch(new Request("http://localhost/telemetry/requests?limit=abc"))
     expect(res.status).toBe(400)
-    const body = await res.json() as any
+    const body = await res.json() as ErrorBody
     expect(body.error.message).toContain("limit")
   })
 
@@ -292,13 +300,13 @@ describe("Telemetry route param validation", () => {
 
     const res = await app.fetch(new Request("http://localhost/telemetry/requests?limit=0"))
     expect(res.status).toBe(200)
-    expect((await res.json() as any[]).length).toBe(0)
+    expect((await res.json() as RequestMetric[]).length).toBe(0)
   })
 
   it("rejects an unparseable since", async () => {
     const res = await app.fetch(new Request("http://localhost/telemetry/requests?since=yesterday"))
     expect(res.status).toBe(400)
-    const body = await res.json() as any
+    const body = await res.json() as ErrorBody
     expect(body.error.message).toContain("since")
   })
 
@@ -309,7 +317,7 @@ describe("Telemetry route param validation", () => {
     const res = await app.fetch(
       new Request(`http://localhost/telemetry/requests?since=${Date.now() - 60_000}`)
     )
-    const body = await res.json() as any[]
+    const body = await res.json() as RequestMetric[]
     expect(body.length).toBe(1)
     expect(body[0]!.requestId).toBe("new")
   })
@@ -320,7 +328,7 @@ describe("Telemetry route param validation", () => {
     telemetryStore.record(makeMetric({ error: null }))
 
     const res = await app.fetch(new Request("http://localhost/telemetry/summary"))
-    const body = await res.json() as any
+    const body = await res.json() as TelemetrySummary
     expect(body.errorCount).toBe(2)
     expect(body.byError).toEqual({ upstream_timeout: 2 })
   })
