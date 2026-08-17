@@ -209,9 +209,13 @@ function render(s, reqs, logs) {
   html += '<div id="panel-overview" class="tab-panel' + (activeTab === 'overview' ? ' active' : '') + '">';
 
   // Summary cards
+  const errorTypes = Object.entries(s.byError || {}).sort((a, b) => b[1] - a[1]);
   html += '<div class="cards">'
     + card('Requests', s.totalRequests, s.requestsPerMinute.toFixed(1) + ' req/min')
-    + card('Errors', s.errorCount, s.totalRequests > 0 ? ((s.errorCount/s.totalRequests)*100).toFixed(1) + '% error rate' : '')
+    + card('Errors', s.errorCount, s.totalRequests > 0
+        ? ((s.errorCount/s.totalRequests)*100).toFixed(1) + '% error rate'
+          + (errorTypes.length > 0 ? ' — top: ' + esc(errorTypes[0][0]) : '')
+        : '')
     + '<div class="card"><div class="card-label">Envelope</div><div class="card-value" style="color:' + ((s.envelopeViolationCount || 0) > 0 ? 'var(--red)' : 'var(--green)') + '">' + (s.envelopeViolationCount || 0) + '</div><div class="card-detail">' + ((s.envelopeViolationCount || 0) > 0 ? 'wire-contract violations — check logs' : 'wire contract clean') + '</div></div>'
     + card('Median Total', ms(s.totalDuration.p50), 'p95: ' + ms(s.totalDuration.p95))
     + card('Median TTFB', ms(s.ttfb.p50), 'p95: ' + ms(s.ttfb.p95))
@@ -277,6 +281,19 @@ function render(s, reqs, logs) {
     html += '<div class="cards">';
     for (const [name, data] of models) {
       html += card(esc(name), data.count + ' reqs', 'avg ' + ms(data.avgTotalMs));
+    }
+    html += '</div>';
+  }
+
+  // Error breakdown — an error rate on its own says nothing about what to do.
+  // A window of upstream_timeout and a window of authentication_error read the
+  // same at 38% and need opposite responses.
+  if (errorTypes.length > 0) {
+    html += '<div class="cards">';
+    for (const [type, count] of errorTypes) {
+      html += '<div class="card"><div class="card-label">Error: ' + esc(type) + '</div>'
+        + '<div class="card-value" style="color:var(--red)">' + count + '</div>'
+        + '<div class="card-detail">' + ((count / s.totalRequests) * 100).toFixed(1) + '% of requests</div></div>';
     }
     html += '</div>';
   }

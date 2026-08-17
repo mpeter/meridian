@@ -202,3 +202,55 @@ describe("ITelemetryStore conformance", () => {
     expect(store.size).toBe(0)
   })
 })
+
+describe("Error-type breakdown", () => {
+  let store: MemoryTelemetryStore
+
+  beforeEach(() => {
+    store = new MemoryTelemetryStore(50)
+  })
+
+  it("counts errors by classified type", () => {
+    store.record(makeMetric({ error: "upstream_timeout" }))
+    store.record(makeMetric({ error: "upstream_timeout" }))
+    store.record(makeMetric({ error: "invalid_request_error" }))
+    store.record(makeMetric({ error: null }))
+
+    const s = store.summarize()
+    expect(s.errorCount).toBe(3)
+    expect(s.byError).toEqual({ upstream_timeout: 2, invalid_request_error: 1 })
+  })
+
+  it("omits successful requests from the breakdown", () => {
+    store.record(makeMetric({ error: null }))
+    store.record(makeMetric({ error: null }))
+
+    const s = store.summarize()
+    expect(s.errorCount).toBe(0)
+    expect(s.byError).toEqual({})
+  })
+
+  it("keeps the breakdown consistent with the total error count", () => {
+    for (const e of ["api_error", "api_error", "authentication_error", "overloaded_error"]) {
+      store.record(makeMetric({ error: e }))
+    }
+
+    const s = store.summarize()
+    const summed = Object.values(s.byError).reduce((a, b) => a + b, 0)
+    expect(summed).toBe(s.errorCount)
+  })
+
+  it("returns an empty breakdown for an empty window", () => {
+    const s = store.summarize()
+    expect(s.totalRequests).toBe(0)
+    expect(s.byError).toEqual({})
+  })
+
+  it("only counts errors inside the window", () => {
+    store.record(makeMetric({ error: "upstream_timeout", timestamp: Date.now() - 600_000 }))
+    store.record(makeMetric({ error: "api_error", timestamp: Date.now() }))
+
+    const s = store.summarize(60_000)
+    expect(s.byError).toEqual({ api_error: 1 })
+  })
+})

@@ -314,6 +314,17 @@ describe("Telemetry route param validation", () => {
     expect(body[0]!.requestId).toBe("new")
   })
 
+  it("exposes the error-type breakdown in the summary payload", async () => {
+    telemetryStore.record(makeMetric({ error: "upstream_timeout" }))
+    telemetryStore.record(makeMetric({ error: "upstream_timeout" }))
+    telemetryStore.record(makeMetric({ error: null }))
+
+    const res = await app.fetch(new Request("http://localhost/telemetry/summary"))
+    const body = await res.json() as any
+    expect(body.errorCount).toBe(2)
+    expect(body.byError).toEqual({ upstream_timeout: 2 })
+  })
+
   it("validates limit and since on the logs route too", async () => {
     const badLimit = await app.fetch(new Request("http://localhost/telemetry/logs?limit=lots"))
     expect(badLimit.status).toBe(400)

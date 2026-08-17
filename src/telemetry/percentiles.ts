@@ -40,6 +40,7 @@ export function computeSummary(
       windowMs,
       totalRequests: 0,
       errorCount: 0,
+      byError: {},
       envelopeViolationCount: 0,
       requestsPerMinute: 0,
       queueWait: emptyPhase,
@@ -62,6 +63,12 @@ export function computeSummary(
   }
 
   const errorCount = metrics.filter(m => m.error !== null).length
+
+  const byError: Record<string, number> = {}
+  for (const m of metrics) {
+    if (m.error === null) continue
+    byError[m.error] = (byError[m.error] ?? 0) + 1
+  }
   const envelopeViolationCount = metrics.reduce((sum, m) => sum + (m.envelopeViolations?.length ?? 0), 0)
 
   const oldest = metrics[metrics.length - 1]!.timestamp
@@ -116,6 +123,7 @@ export function computeSummary(
     windowMs,
     totalRequests: metrics.length,
     errorCount,
+    byError,
     envelopeViolationCount,
     requestsPerMinute: Math.round(requestsPerMinute * 100) / 100,
     queueWait: computePercentiles(queueWaits),

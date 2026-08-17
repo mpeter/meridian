@@ -165,6 +165,12 @@ export interface TelemetrySummary {
   totalRequests: number
   /** Requests that returned an error */
   errorCount: number
+  /** Error counts keyed by classified error type (`upstream_timeout`,
+   *  `invalid_request_error`, ...). Bounded: the vocabulary is the classifier's,
+   *  not free-form messages. An error rate on its own says nothing actionable —
+   *  a window of `upstream_timeout` and a window of `authentication_error` need
+   *  opposite responses. */
+  byError: Record<string, number>
   /** Total envelope-integrity violations across the window (dangling blocks,
    *  undelivered tool calls, empty required inputs). 0 = wire contract clean. */
   envelopeViolationCount: number
