@@ -9,6 +9,7 @@ import { join } from "node:path"
 import { query } from "@anthropic-ai/claude-agent-sdk"
 import { rateLimitStore } from "./rateLimitStore"
 import { guardUpstreamIdle, UpstreamIdleError } from "./streamIdleGuard"
+import { IdleStallTracker } from "./idleStallCeiling"
 import { linkRequestAbort } from "./requestAbort"
 import { fetchOAuthUsage, fetchOAuthUsageResult } from "./oauthUsage"
 import { resolveSdkWorkingDirectory } from "./cwd"
@@ -135,6 +136,14 @@ let claudeExecutable = ""
 // to abort the same hung model — see the coordination contract in
 // streamIdleGuard.ts.
 const UPSTREAM_IDLE_MS = envInt("UPSTREAM_IDLE_MS", 90_000)
+
+// Consecutive stalls tolerated on ONE session before its 504 becomes terminal.
+// A 5xx tells every client retry policy "transient, try again", so a session
+// that stalls deterministically is replayed forever at full upstream cost. 3
+// absorbs a genuine one-off stall (and the odd second one) while capping the
+// waste at three idle windows instead of an afternoon. 0 disables the ceiling
+// and restores the pre-ceiling behaviour exactly.
+const UPSTREAM_IDLE_MAX_CONSECUTIVE = envInt("UPSTREAM_IDLE_MAX_CONSECUTIVE", 3)
 
 function credentialStoreForProfile(profile: ResolvedProfile): CredentialStore | undefined {
   if (profile.type !== "claude-max") return undefined
@@ -410,6 +419,9 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
   // invalidation from MCP server re-creation. Key hashes tool name + schema
   // so silently-updated tool definitions force a rebuild.
   const sessionMcpCache = new LRUMap<string, { key: string; mcp: ReturnType<typeof createPassthroughMcpServer> }>(getMaxSessionsLimit())
+
+  // Consecutive upstream-idle stalls per session, for the retry ceiling.
+  const idleStalls = new IdleStallTracker(UPSTREAM_IDLE_MAX_CONSECUTIVE, getMaxSessionsLimit())
 
   // In-flight session stores. The streaming drain design ends the client's
   // response at the turn boundary (fast), while deny persistence + the early
@@ -2185,6 +2197,9 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
             if (lastUsage) logUsage(requestMeta.requestId, lastUsage)
             // Accumulate discovered tools into the session-level set
             const sessId = currentSessionId || resumeSessionId
+            // A turn that completed is proof the session can still make
+            // progress, so its stall streak starts over.
+            if (sessId) idleStalls.clear(sessId)
             if (sessId && discoveredTools.size > 0) {
               if (!sessionDiscoveredTools.has(sessId)) sessionDiscoveredTools.set(sessId, new Set())
               for (const t of discoveredTools) sessionDiscoveredTools.get(sessId)!.add(t)
@@ -3328,6 +3343,9 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
               if (lastUsage) logUsage(requestMeta.requestId, lastUsage)
               // Accumulate discovered tools into the session-level set
               const sessId = currentSessionId || resumeSessionId
+              // A turn that completed is proof the session can still make
+              // progress, so its stall streak starts over.
+              if (sessId) idleStalls.clear(sessId)
               if (sessId && discoveredTools.size > 0) {
                 if (!sessionDiscoveredTools.has(sessId)) sessionDiscoveredTools.set(sessId, new Set())
                 for (const t of discoveredTools) sessionDiscoveredTools.get(sessId)!.add(t)
@@ -3780,13 +3798,27 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                 error: errMsg,
                 ...(stderrOutput ? { stderr: stderrOutput } : {})
               })
-              const streamErr = error instanceof UpstreamIdleError
-                ? {
-                    status: 504,
-                    type: "upstream_timeout",
-                    message: `Upstream stalled: no data for ${error.sinceLastMs}ms`,
-                  }
-                : classifyError(errMsg, model)
+              let streamErr: { status: number; type: string; message: string }
+              if (error instanceof UpstreamIdleError) {
+                // A stalled stream is retryable once; the same session stalling
+                // the same way over and over is not, and only the status code
+                // can say so — the proxy does not retry, the client does.
+                const verdict = idleStalls.record(
+                  currentSessionId || resumeSessionId || "",
+                  UPSTREAM_IDLE_MS,
+                  error.sinceLastMs,
+                )
+                claudeLog("upstream.idle_streak", {
+                  model,
+                  sinceLastMs: error.sinceLastMs,
+                  consecutive: verdict.consecutive,
+                  ceiling: UPSTREAM_IDLE_MAX_CONSECUTIVE,
+                  terminal: verdict.terminal,
+                })
+                streamErr = { status: verdict.status, type: verdict.type, message: verdict.message }
+              } else {
+                streamErr = classifyError(errMsg, model)
+              }
               claudeLog("proxy.anthropic.error", { error: errMsg, classified: streamErr.type })
 
               // Surface the SDK termination reason (max_turns / process_exit / aborted)
@@ -3820,6 +3852,13 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
               }) && messageStartEmitted
 
               if (canRecoverAsToolUse) {
+                // A recovered stall delivered the client its tool calls, so the
+                // session is making progress and its streak starts over. Without
+                // this the counter climbs through stalls that were absorbed, and
+                // the first genuinely unrecoverable one reads as terminal.
+                const recoveredSessId = currentSessionId || resumeSessionId
+                if (recoveredSessId) idleStalls.clear(recoveredSessId)
+
                 // Log the recovery at session level (not error) — it's a
                 // notable flow control event but not a failure for the client.
                 diagnosticLog.session(
