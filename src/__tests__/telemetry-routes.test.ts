@@ -201,3 +201,124 @@ describe("Telemetry routes", () => {
     expect(body).not.toContain("undefined")
   })
 })
+
+describe("Telemetry route param validation", () => {
+  let app: Hono
+
+  beforeEach(() => {
+    telemetryStore.clear()
+    app = new Hono()
+    app.route("/telemetry", createTelemetryRoutes())
+  })
+
+  it("reads a unit-suffixed window instead of parsing it as 1ms", async () => {
+    telemetryStore.record(makeMetric({ timestamp: Date.now() - 7_200_000 })) // 2h ago
+    telemetryStore.record(makeMetric({ timestamp: Date.now() - 120_000 })) // 2 min ago
+
+    const res = await app.fetch(new Request("http://localhost/telemetry/summary?window=1h"))
+    expect(res.status).toBe(200)
+    const body = await res.json() as any
+    expect(body.totalRequests).toBe(1) // Number.parseInt("1h") === 1 would report 0
+  })
+
+  it("treats a second-suffixed window as seconds", async () => {
+    telemetryStore.record(makeMetric({ timestamp: Date.now() - 120_000 }))
+    telemetryStore.record(makeMetric({ timestamp: Date.now() }))
+
+    const res = await app.fetch(new Request("http://localhost/telemetry/summary?window=60s"))
+    const body = await res.json() as any
+    expect(body.totalRequests).toBe(1)
+  })
+
+  it("accepts a fractional unit-suffixed window", async () => {
+    telemetryStore.record(makeMetric({ timestamp: Date.now() - 100_000 }))
+    telemetryStore.record(makeMetric({ timestamp: Date.now() - 80_000 }))
+
+    const res = await app.fetch(new Request("http://localhost/telemetry/summary?window=1.5m"))
+    const body = await res.json() as any
+    expect(body.totalRequests).toBe(1) // 90s window
+  })
+
+  it("still accepts a bare millisecond window (what the dashboard sends)", async () => {
+    telemetryStore.record(makeMetric({ timestamp: Date.now() - 120_000 }))
+    telemetryStore.record(makeMetric({ timestamp: Date.now() }))
+
+    const res = await app.fetch(new Request("http://localhost/telemetry/summary?window=60000"))
+    const body = await res.json() as any
+    expect(body.totalRequests).toBe(1)
+  })
+
+  it("rejects an unparseable window rather than summarizing over NaN", async () => {
+    telemetryStore.record(makeMetric())
+
+    const res = await app.fetch(new Request("http://localhost/telemetry/summary?window=abc"))
+    expect(res.status).toBe(400)
+    const body = await res.json() as any
+    expect(body.error.type).toBe("invalid_request_error")
+    expect(body.error.message).toContain("window")
+  })
+
+  it("rejects a zero or negative window", async () => {
+    const zero = await app.fetch(new Request("http://localhost/telemetry/summary?window=0"))
+    expect(zero.status).toBe(400)
+
+    const negative = await app.fetch(new Request("http://localhost/telemetry/summary?window=-5000"))
+    expect(negative.status).toBe(400)
+  })
+
+  it("falls back to the default window when the param is absent or empty", async () => {
+    telemetryStore.record(makeMetric())
+
+    const absent = await app.fetch(new Request("http://localhost/telemetry/summary"))
+    expect(absent.status).toBe(200)
+    expect((await absent.json() as any).totalRequests).toBe(1)
+
+    const empty = await app.fetch(new Request("http://localhost/telemetry/summary?window="))
+    expect(empty.status).toBe(200)
+    expect((await empty.json() as any).totalRequests).toBe(1)
+  })
+
+  it("rejects an unparseable limit rather than returning an empty list", async () => {
+    telemetryStore.record(makeMetric())
+
+    const res = await app.fetch(new Request("http://localhost/telemetry/requests?limit=abc"))
+    expect(res.status).toBe(400)
+    const body = await res.json() as any
+    expect(body.error.message).toContain("limit")
+  })
+
+  it("honours an explicit limit of zero", async () => {
+    telemetryStore.record(makeMetric())
+
+    const res = await app.fetch(new Request("http://localhost/telemetry/requests?limit=0"))
+    expect(res.status).toBe(200)
+    expect((await res.json() as any[]).length).toBe(0)
+  })
+
+  it("rejects an unparseable since", async () => {
+    const res = await app.fetch(new Request("http://localhost/telemetry/requests?since=yesterday"))
+    expect(res.status).toBe(400)
+    const body = await res.json() as any
+    expect(body.error.message).toContain("since")
+  })
+
+  it("filters by a valid since timestamp", async () => {
+    telemetryStore.record(makeMetric({ requestId: "old", timestamp: Date.now() - 600_000 }))
+    telemetryStore.record(makeMetric({ requestId: "new", timestamp: Date.now() }))
+
+    const res = await app.fetch(
+      new Request(`http://localhost/telemetry/requests?since=${Date.now() - 60_000}`)
+    )
+    const body = await res.json() as any[]
+    expect(body.length).toBe(1)
+    expect(body[0]!.requestId).toBe("new")
+  })
+
+  it("validates limit and since on the logs route too", async () => {
+    const badLimit = await app.fetch(new Request("http://localhost/telemetry/logs?limit=lots"))
+    expect(badLimit.status).toBe(400)
+
+    const badSince = await app.fetch(new Request("http://localhost/telemetry/logs?since=recently"))
+    expect(badSince.status).toBe(400)
+  })
+})
