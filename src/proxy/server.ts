@@ -2369,6 +2369,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
             lineageType,
             messageCount: allMessages.length,
             sdkSessionId: currentSessionId || resumeSessionId,
+            clientSessionId: profileSessionId,
             status: 200,
             queueWaitMs: nonStreamQueueWaitMs,
             proxyOverheadMs: upstreamStartAt - requestStartAt - nonStreamQueueWaitMs,
@@ -3400,6 +3401,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                   kind: preRecoveryOutcome.kind,
                   reason: preRecoveryOutcome.kind === "silent" ? preRecoveryOutcome.reason : undefined,
                   sdkSessionId: currentSessionId || resumeSessionId,
+                  clientSessionId: profileSessionId,
                 })
                 const recoveryLifter = createRecoveryLifter(() => nextClientBlockIndex++)
                 // The fork's identity. Without capturing it the recovered answer
@@ -3679,6 +3681,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                   lineageType,
                   messageCount: allMessages.length,
                   sdkSessionId: currentSessionId || resumeSessionId,
+                  clientSessionId: profileSessionId,
                   status: 200,
                   queueWaitMs: streamQueueWaitMs,
                   proxyOverheadMs: upstreamStartAt - requestStartAt - streamQueueWaitMs,
@@ -3901,6 +3904,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                   lineageType,
                   messageCount: allMessages.length,
                   sdkSessionId: resumeSessionId,
+                  clientSessionId: profileSessionId,
                   status: 200,
                   queueWaitMs: recoverQueueWaitMs,
                   proxyOverheadMs: upstreamStartAt - requestStartAt - recoverQueueWaitMs,
@@ -3953,6 +3957,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                 lineageType,
                 messageCount: allMessages.length,
                 sdkSessionId: resumeSessionId,
+                clientSessionId: profileSessionId,
                 status: streamErr.status,
                 queueWaitMs: streamErrQueueWaitMs,
                 proxyOverheadMs: upstreamStartAt - requestStartAt - streamErrQueueWaitMs,

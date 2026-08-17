@@ -78,6 +78,13 @@ export const dashboardHtml = `<!DOCTYPE html>
   .log-filter.active { background: rgba(88,166,255,0.1); border-color: var(--accent); color: var(--accent); }
   .usage-note { font-size: 11px; color: var(--muted); }
 
+  /* Sessions */
+  .sess-id { font-family: 'SF Mono', SFMono-Regular, Consolas, monospace; font-size: 12px; color: var(--accent2); }
+  .sess-sub { font-size: 10px; color: var(--muted); }
+  .loop-pill { display: inline-block; font-size: 10px; padding: 1px 7px; border-radius: 10px; margin-right: 4px;
+               background: rgba(210,153,34,0.12); border: 1px solid rgba(210,153,34,0.35); color: var(--yellow);
+               font-variant-numeric: tabular-nums; }
+
 ` + profileBarCss + `
 </style>
 </head>
@@ -172,19 +179,26 @@ function setLogFilter(filter) {
 async function refresh() {
   const w = $('#window').value;
   try {
-    const [summary, reqs, logs] = await Promise.all([
+    const [summary, reqs, logs, sessions] = await Promise.all([
       fetch('/telemetry/summary?window=' + w).then(r => r.json()),
       fetch('/telemetry/requests?limit=50&since=' + (Date.now() - Number(w))).then(r => r.json()),
       fetch('/telemetry/logs?limit=200&since=' + (Date.now() - Number(w))).then(r => r.json()),
+      fetch('/telemetry/sessions?window=' + w).then(r => r.json()),
     ]);
-    render(summary, reqs, logs);
+    render(summary, reqs, logs, sessions);
     $('#lastUpdate').textContent = 'Updated ' + new Date().toLocaleTimeString();
   } catch (e) {
     $('#content').innerHTML = '<div class="empty">Failed to load telemetry</div>';
   }
 }
 
-function render(s, reqs, logs) {
+function render(s, reqs, logs, sessions) {
+  // A proxy on an older build answers /telemetry/sessions with a 404 body, so
+  // treat anything without a sessions array as "no session data" rather than
+  // letting the whole dashboard fail to render.
+  const sessList = (sessions && Array.isArray(sessions.sessions)) ? sessions.sessions : [];
+  const sessMeta = sessions || {};
+
   if (s.totalRequests === 0 && (!logs || logs.length === 0)) {
     $('#content').innerHTML = '<div class="empty">No requests recorded yet. Send a request through the proxy to see telemetry.</div>';
     return;
@@ -201,6 +215,8 @@ function render(s, reqs, logs) {
     + '<div class="tab' + (activeTab === 'overview' ? ' active' : '') + '" data-tab="overview" onclick="switchTab(&apos;overview&apos;)">Overview</div>'
     + '<div class="tab' + (activeTab === 'requests' ? ' active' : '') + '" data-tab="requests" onclick="switchTab(&apos;requests&apos;)">'
     +   'Requests<span class="tab-badge">' + reqs.length + '</span></div>'
+    + '<div class="tab' + (activeTab === 'sessions' ? ' active' : '') + '" data-tab="sessions" onclick="switchTab(&apos;sessions&apos;)">'
+    +   'Sessions<span class="tab-badge">' + sessList.length + '</span></div>'
     + '<div class="tab' + (activeTab === 'logs' ? ' active' : '') + '" data-tab="logs" onclick="switchTab(&apos;logs&apos;)">'
     +   'Logs<span class="tab-badge">' + logs.length + '</span></div>'
     + '</div>';
@@ -375,6 +391,76 @@ function render(s, reqs, logs) {
   html += '</tbody></table>';
   html += '</div>'; // end requests panel
 
+  // ==================== Sessions tab ====================
+  // The request table shows one row per call, so a stuck agent reads as a column
+  // of individually healthy rows. Grouping by SDK session and counting repeated
+  // request shapes is what makes a loop visible.
+  html += '<div id="panel-sessions" class="tab-panel' + (activeTab === 'sessions' ? ' active' : '') + '">';
+
+  if (sessList.length === 0) {
+    html += '<div class="empty">No request in this window carried a session id, so there is nothing to group.</div>';
+  } else {
+    const totalUpstream = sessList.reduce((n, g) => n + g.upstreamMs, 0);
+    const totalWasted = sessMeta.totalWastedUpstreamMs || 0;
+    const looping = sessList.filter(g => g.repeats.length > 0).length;
+    const wasteShare = totalUpstream > 0 ? totalWasted / totalUpstream : 0;
+
+    html += '<div class="cards">'
+      + card('Sessions', sessList.length, (sessMeta.ungroupedRequests || 0) > 0
+          ? sessMeta.ungroupedRequests + ' request' + (sessMeta.ungroupedRequests === 1 ? '' : 's') + ' had no session id'
+          : 'every request grouped')
+      + '<div class="card"><div class="card-label">Repeated Work</div>'
+      +   '<div class="card-value" style="color:' + (totalWasted > 0 ? wasteColor(wasteShare) : 'var(--text)') + '">' + ms(totalWasted) + '</div>'
+      +   '<div class="card-detail">' + (totalWasted > 0
+            ? (wasteShare * 100).toFixed(0) + '% of upstream time'
+            : 'no repeated or failed calls') + '</div></div>'
+      + '<div class="card"><div class="card-label">Looping Sessions</div>'
+      +   '<div class="card-value" style="color:' + (looping > 0 ? 'var(--yellow)' : 'var(--text)') + '">' + looping + '</div>'
+      +   '<div class="card-detail">' + (looping > 0 ? 'resent a conversation state' : 'every session moved forward') + '</div></div>'
+      + '</div>';
+
+    html += '<table><thead><tr><th>Session</th><th>Model</th><th>Requests</th><th>Active</th>'
+      + '<th>Upstream</th><th>Repeated</th><th>Loops</th></tr></thead><tbody>';
+
+    for (const g of sessList) {
+      const share = g.upstreamMs > 0 ? g.wastedUpstreamMs / g.upstreamMs : 0;
+      const sub = [g.adapter, g.requestSource].filter(Boolean).map(esc).join(' · ');
+
+      let loops = '';
+      if (g.repeats.length === 0) {
+        loops = '<span style="color:var(--muted)">—</span>';
+      } else {
+        for (const rep of g.repeats.slice(0, 2)) {
+          loops += '<span class="loop-pill" title="' + esc(rep.model) + ', ' + ms(rep.repeatedUpstreamMs) + ' spent on the repeats">'
+            + rep.occurrences + '\u00d7 at ' + rep.messageCount + ' msgs</span>';
+        }
+        if (g.repeats.length > 2) loops += '<span class="sess-sub">+' + (g.repeats.length - 2) + ' more</span>';
+      }
+
+      html += '<tr>'
+        + '<td><span class="sess-id">' + esc(g.sessionId.slice(0, 8)) + '</span>'
+        +   (sub ? '<br><span class="sess-sub">' + sub + '</span>' : '') + '</td>'
+        + '<td>' + esc(g.model) + '</td>'
+        + '<td class="mono">' + g.requests
+        +   (g.errorCount > 0 ? '<br><span class="sess-sub" style="color:var(--red)">' + g.errorCount + ' failed</span>' : '') + '</td>'
+        + '<td class="mono">' + ms(g.lastTimestamp - g.firstTimestamp)
+        +   '<br><span class="sess-sub">' + ago(g.lastTimestamp) + '</span></td>'
+        + '<td class="mono">' + ms(g.upstreamMs) + '</td>'
+        + '<td class="mono">' + (g.wastedUpstreamMs > 0
+            ? '<span style="color:' + wasteColor(share) + '">' + ms(g.wastedUpstreamMs) + '</span>'
+              + '<br><span class="sess-sub">' + (share * 100).toFixed(0) + '%</span>'
+            : '<span style="color:var(--muted)">—</span>') + '</td>'
+        + '<td>' + loops + '</td>'
+        + '</tr>';
+    }
+    html += '</tbody></table>';
+    html += '<div class="usage-note" style="margin-top:8px">Repeated work is upstream time that bought nothing:'
+      + ' a request that failed, or one that resent a conversation the session had already sent at that length.'
+      + ' A client re-running an identical prompt on purpose counts here too — it is still work paid for twice.</div>';
+  }
+
+  html += '</div>'; // end sessions panel
+
   // ==================== Logs tab ====================
   html += '<div id="panel-logs" class="tab-panel' + (activeTab === 'logs' ? ' active' : '') + '">';
 
@@ -411,6 +497,12 @@ function render(s, reqs, logs) {
 
 
   $('#content').innerHTML = html;
+}
+
+// Waste share reuses the documented utilization thresholds: <60% green,
+// >=60% yellow, >=85% red.
+function wasteColor(share) {
+  return share >= 0.85 ? 'var(--red)' : share >= 0.6 ? 'var(--yellow)' : 'var(--green)';
 }
 
 function card(label, value, detail) {
