@@ -517,6 +517,9 @@ curl -s http://127.0.0.1:3456/telemetry/summary | python3 -m json.tool
 
 # Diagnostic logs
 curl -s http://127.0.0.1:3456/telemetry/logs?limit=5 | python3 -m json.tool | head -20
+
+# Per-conversation rollup
+curl -s http://127.0.0.1:3456/telemetry/sessions | python3 -m json.tool | head -30
 ```
 
 **Pass criteria:**
@@ -524,6 +527,7 @@ curl -s http://127.0.0.1:3456/telemetry/logs?limit=5 | python3 -m json.tool | he
 - `/telemetry/requests` returns an array of request metrics with `requestId`, `model`, `lineageType`
 - `/telemetry/summary` returns `totalRequests > 0`, `errorCount`, percentile latencies
 - `/telemetry/logs` returns an array with `level`, `category`, `message` fields
+- `/telemetry/sessions` returns `sessions` (each with `sessionId`, `requests`, `wastedUpstreamMs`, `repeats`), `ungroupedRequests`, and `totalWastedUpstreamMs`
 
 ---
 

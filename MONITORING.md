@@ -4,9 +4,9 @@ Meridian tracks token usage and prompt cache efficiency on every request. This g
 
 ## Where to Look
 
-- **Dashboard**: `http://127.0.0.1:3456/telemetry` — Requests tab shows Tokens and Cache columns, Overview tab shows aggregate token stats
+- **Dashboard**: `http://127.0.0.1:3456/telemetry` — Requests tab shows Tokens and Cache columns, Overview tab shows aggregate token stats, Sessions tab groups requests by conversation and flags repeated work
 - **Stderr log**: `tail -f ~/.cache/meridian/proxy.err` — every request logs `cache=XX%`, anomalies show as `TOKEN ALERT` or `TOKEN WARN`
-- **API**: `GET /telemetry/requests` for per-request data, `GET /telemetry/logs?category=token` for anomaly alerts
+- **API**: `GET /telemetry/requests` for per-request data, `GET /telemetry/logs?category=token` for anomaly alerts, `GET /telemetry/sessions` for per-conversation rollups
 
 ## What's Normal
 
@@ -54,6 +54,33 @@ The **Model Pricing** section on the Settings page (`/settings`) edits the rates
 - Cache read/write rates are optional when adding a model; they default to 0.1x and 1.25x of the input rate.
 
 Overrides persist to `~/.config/meridian/model-pricing.json` (override the path with `MERIDIAN_PRICING_CONFIG`) and take effect on the next dashboard refresh, no restart needed. The API surface is `GET /settings/api/pricing`, `PUT /settings/api/pricing/:model`, and `DELETE /settings/api/pricing/:model`.
+
+## Repeated Work and Session Loops
+
+The Requests tab answers "was that request slow". It cannot answer "is this agent going in circles" — a loop looks like a column of individually healthy rows, each one fast, successful, and indistinguishable from the last, and a newest-50 view truncates exactly the case you want to see.
+
+The **Sessions tab** groups requests by conversation and reports how much upstream time bought nothing.
+
+| Column | What it means |
+|--------|---------------|
+| Requests | Calls in the conversation |
+| Active | Wall time from the conversation's first request to its last |
+| Upstream | Total upstream time the conversation spent |
+| Repeated | Upstream time that bought nothing — failed calls, plus every resend of a conversation shape already sent |
+| Loops | Which shapes repeated, and how often |
+
+A **shape** is model + message count + mode. Two requests sharing a shape mean the session sent the same conversation state twice, so the turn between them produced no progress. The first send is the work; every send after it counts as repeated. A request that both repeats and fails is charged once, so Repeated stays a share of real upstream time rather than a number that can exceed it.
+
+Requests that never recorded a message count (early parse-error records) are left out of repeat detection rather than bucketed under a placeholder, which would flag any session unlucky enough to log two of them.
+
+Grouping keys on the client's session id, not the SDK's. The Claude SDK issues a fresh session id on every resumed turn, so `sdkSessionId` identifies a single upstream call rather than the conversation containing it — grouping on it puts every turn of one conversation in its own bucket, where no repeat can ever form. Requests carrying neither id are counted as `ungroupedRequests` and shown on the tab, so the view admits when it is only telling part of the story.
+
+```bash
+# Per-conversation rollup for the last hour
+curl -s 'http://127.0.0.1:3456/telemetry/sessions?window=3600000' | python3 -m json.tool
+```
+
+The route reads 500 requests where the Requests tab reads 50, since a loop is the high-volume case. `window` (ms) and `limit` are both optional; a malformed value is a 400 rather than a silently clamped default.
 
 ## Quick Health Check
 
