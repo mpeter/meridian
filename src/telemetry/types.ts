@@ -77,6 +77,16 @@ export interface RequestMetric {
 
   /** SDK session ID used for this request (for correlating across turns) */
   sdkSessionId?: string
+  /**
+   * The client's own conversation id (OpenCode's session id, profile-scoped),
+   * which is what meridian keys its session cache on.
+   *
+   * Distinct from sdkSessionId on purpose: every resumed turn gets a *fresh*
+   * Claude SDK session id, so sdkSessionId identifies one upstream call, not
+   * the conversation it belongs to. Grouping by it puts every turn in its own
+   * bucket. This is the id that stays put across turns.
+   */
+  clientSessionId?: string
 
   /** HTTP status code returned to the client */
   status: number
@@ -202,6 +212,63 @@ export interface TelemetrySummary {
 
   /** Estimated cost of the window's usage at static API list prices */
   costEstimate: CostEstimate
+}
+
+/** One request shape a session sent more than once. */
+export interface SessionShapeRepeat {
+  /** Model the repeated requests went to (requestModel when the client sent one) */
+  model: string
+  /** Conversation length shared by every occurrence */
+  messageCount: number
+  /** How many times the shape was sent; always >= 2 */
+  occurrences: number
+  /** Upstream time spent on the occurrences after the first (ms) */
+  repeatedUpstreamMs: number
+}
+
+/** One SDK session's requests, rolled up. */
+export interface SessionGroup {
+  /**
+   * The conversation's id: the client's own session id where the request
+   * carried one, otherwise the SDK session id as a fallback.
+   *
+   * Preferring the client id matters. Every resumed turn is issued a fresh SDK
+   * session id, so grouping on that alone puts each turn in a bucket of one and
+   * a loop never forms.
+   */
+  sessionId: string
+  /** Adapter that served the session; the first one seen if it varied */
+  adapter?: string
+  /** Client-stamped source tag, when one was sent */
+  requestSource?: string
+  /** Most-used model in the session */
+  model: string
+  requests: number
+  errorCount: number
+  /** Oldest and newest request timestamps within the window */
+  firstTimestamp: number
+  lastTimestamp: number
+  /** Total upstream (SDK) time across the session's requests (ms) */
+  upstreamMs: number
+  /** Upstream time that bought nothing: errored requests, plus every repeat of
+   *  a shape after its first occurrence. A request that is both is counted
+   *  once. */
+  wastedUpstreamMs: number
+  /** Repeated shapes, most-repeated first. Empty when the session never resent
+   *  a state — the ordinary case. */
+  repeats: SessionShapeRepeat[]
+}
+
+/** Session rollup over a window. */
+export interface SessionGroupsReport {
+  /** Sessions in the window, worst wasted time first */
+  sessions: SessionGroup[]
+  /** Requests carrying neither a client nor an SDK session id. They cannot be
+   *  grouped, so a high count
+   *  means this view is only telling part of the story. */
+  ungroupedRequests: number
+  /** Sum of wastedUpstreamMs across every session */
+  totalWastedUpstreamMs: number
 }
 
 /** Storage backend for request metrics. */

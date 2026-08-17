@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeEach } from "bun:test"
 import { Hono } from "hono"
 import { telemetryStore, createTelemetryRoutes, renderPrometheusMetrics } from "../telemetry"
-import type { RequestMetric, TelemetrySummary } from "../telemetry"
+import type { RequestMetric, SessionGroupsReport, TelemetrySummary } from "../telemetry"
 
 function makeMetric(overrides: Partial<RequestMetric> = {}): RequestMetric {
   return {
@@ -339,5 +339,65 @@ describe("Telemetry route param validation", () => {
 
     const badSince = await app.fetch(new Request("http://localhost/telemetry/logs?since=recently"))
     expect(badSince.status).toBe(400)
+  })
+})
+
+describe("GET /telemetry/sessions", () => {
+  let app: Hono
+
+  beforeEach(() => {
+    telemetryStore.clear()
+    app = new Hono()
+    app.route("/telemetry", createTelemetryRoutes())
+  })
+
+  async function sessions(query = ""): Promise<SessionGroupsReport> {
+    const res = await app.fetch(new Request("http://localhost/telemetry/sessions" + query))
+    expect(res.status).toBe(200)
+    return await res.json() as SessionGroupsReport
+  }
+
+  it("rolls the window's requests up by session", async () => {
+    telemetryStore.record(makeMetric({ sdkSessionId: "aaa", messageCount: 1 }))
+    telemetryStore.record(makeMetric({ sdkSessionId: "aaa", messageCount: 2 }))
+    telemetryStore.record(makeMetric({ sdkSessionId: "bbb", messageCount: 1 }))
+    telemetryStore.record(makeMetric())
+
+    const body = await sessions()
+    expect(body.sessions).toHaveLength(2)
+    expect(body.ungroupedRequests).toBe(1)
+  })
+
+  it("sees a loop longer than the request table shows", async () => {
+    // The requests view stops at 50 rows, which is where an 80-call loop hides.
+    for (let i = 0; i < 80; i++) {
+      telemetryStore.record(makeMetric({ sdkSessionId: "stuck", messageCount: 7 }))
+    }
+
+    const body = await sessions()
+    expect(body.sessions[0]!.repeats[0]!.occurrences).toBe(80)
+  })
+
+  it("only counts requests inside the window", async () => {
+    telemetryStore.record(makeMetric({ sdkSessionId: "old", messageCount: 1, timestamp: Date.now() - 7_200_000 }))
+    telemetryStore.record(makeMetric({ sdkSessionId: "recent", messageCount: 1 }))
+
+    const body = await sessions("?window=1h")
+    expect(body.sessions.map(g => g.sessionId)).toEqual(["recent"])
+  })
+
+  it("rejects a malformed window or limit instead of grouping over NaN", async () => {
+    for (const [param, query] of [["window", "?window=abc"], ["limit", "?limit=abc"]]) {
+      const res = await app.fetch(new Request("http://localhost/telemetry/sessions" + query))
+      expect(res.status).toBe(400)
+      const body = await res.json() as ErrorBody
+      expect(body.error.type).toBe("invalid_request_error")
+      expect(body.error.message).toContain(param!)
+    }
+  })
+
+  it("answers an empty window with an empty report, not an error", async () => {
+    const body = await sessions()
+    expect(body).toEqual({ sessions: [], ungroupedRequests: 0, totalWastedUpstreamMs: 0 })
   })
 })

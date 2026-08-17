@@ -43,6 +43,7 @@ export { MemoryDiagnosticLogStore } from "./logStore"
 export { createTelemetryRoutes } from "./routes"
 export { landingHtml } from "./landing"
 export { computePercentiles, computeSummary } from "./percentiles"
+export { computeSessionGroups } from "./sessionGroups"
 export { renderPrometheusMetrics } from "./prometheus"
 export { createSqliteStores } from "./sqlite"
 export type {
@@ -52,4 +53,7 @@ export type {
   ITelemetryStore,
   IDiagnosticLogStore,
   DiagnosticLog,
+  SessionGroup,
+  SessionGroupsReport,
+  SessionShapeRepeat,
 } from "./types"

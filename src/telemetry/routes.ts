@@ -4,6 +4,7 @@
  * GET /telemetry            — HTML dashboard
  * GET /telemetry/requests   — Recent request metrics (JSON)
  * GET /telemetry/summary    — Aggregate statistics (JSON)
+ * GET /telemetry/sessions  — Per-session rollup: loops and wasted time (JSON)
  * GET /telemetry/logs       — Diagnostic logs (JSON)
  */
 
@@ -14,6 +15,7 @@ import { Hono } from "hono"
 import type { Context } from "hono"
 import { telemetryStore, diagnosticLog } from "./index"
 import { dashboardHtml } from "./dashboard"
+import { computeSessionGroups } from "./sessionGroups"
 
 // Read once at module load — src/telemetry/ is two levels below the package root
 const _iconPath = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "assets", "icon.svg")
@@ -102,6 +104,29 @@ export function createTelemetryRoutes() {
 
     const summary = telemetryStore.summarize(windowMs)
     return c.json(summary)
+  })
+
+  // Per-session rollup
+  routes.get("/sessions", (c) => {
+    const rawWindow = c.req.query("window")
+    const windowMs = rawWindow ? parseDuration(rawWindow) : 3_600_000 // default 1 hour
+    if (windowMs === null) {
+      return badParam(c, "window", rawWindow!, "a positive duration in milliseconds, optionally suffixed ms/s/m/h/d (e.g. 3600000 or 1h)")
+    }
+
+    const rawLimit = c.req.query("limit")
+    const limit = rawLimit ? parseCount(rawLimit) : 500
+    if (limit === null) return badParam(c, "limit", rawLimit!, "a non-negative integer")
+
+    // Reads deeper than the request table's 50 rows on purpose: a loop is the
+    // high-volume case, and a session that repeated itself eighty times is
+    // exactly what a newest-50 view truncates away.
+    const metrics = telemetryStore.getRecent({
+      limit: Math.min(limit, 500),
+      since: Date.now() - windowMs,
+    })
+
+    return c.json(computeSessionGroups(metrics))
   })
 
   // Diagnostic logs
