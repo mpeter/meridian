@@ -44,6 +44,7 @@ export { createTelemetryRoutes } from "./routes"
 export { landingHtml } from "./landing"
 export { computePercentiles, computeSummary } from "./percentiles"
 export { computeSessionGroups } from "./sessionGroups"
+export { summarizeErrorDetail, MAX_ERROR_DETAIL_LENGTH } from "./errorDetail"
 export { renderPrometheusMetrics } from "./prometheus"
 export { createSqliteStores } from "./sqlite"
 export type {

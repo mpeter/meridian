@@ -117,6 +117,13 @@ export interface RequestMetric {
   /** Error type if the request failed, null if successful */
   error: string | null
 
+  /** The upstream error text behind `error`, collapsed to one line and bounded
+   *  by `MAX_ERROR_DETAIL_LENGTH`. Absent on success, and on failures whose
+   *  cause produced no message. `error` says which class of thing went wrong and
+   *  is what the breakdown aggregates on; this says what actually happened, and
+   *  is per-record precisely so it never reaches an aggregation key. */
+  errorDetail?: string
+
   /** Input tokens consumed (from SDK usage) */
   inputTokens?: number
 

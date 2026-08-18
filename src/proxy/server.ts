@@ -49,7 +49,7 @@ import { classifyTurnOutcome, createRecoveryLifter, shouldAttemptRecovery, shoul
 import { resolveAgentAlias } from "./agentMatch"
 import { LRUMap } from "../utils/lruMap"
 
-import { telemetryStore, diagnosticLog, createTelemetryRoutes, landingHtml, renderPrometheusMetrics } from "../telemetry"
+import { telemetryStore, diagnosticLog, createTelemetryRoutes, landingHtml, renderPrometheusMetrics, summarizeErrorDetail } from "../telemetry"
 import type { RequestMetric } from "../telemetry"
 import { canRecoverCapturedToolUses, classifyError, extractSdkTermination, formatSdkTermination, classifyResumeRefusal, isRateLimitError, isExtraUsageRequiredError, isExpiredTokenError, isAccountFailoverError, isQuotaRefusal } from "./errors"
 import { refreshOAuthToken, ensureFreshToken, startBackgroundRefresh, stopBackgroundRefresh, createPlatformCredentialStore, getAuthRenewalStatus, resolveRenewalWarnDays, type CredentialStore } from "./tokenRefresh"
@@ -3967,6 +3967,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
                 contentBlocks: eventsForwarded,
                 textEvents: textEventsForwarded,
                 error: streamErr.type,
+                errorDetail: summarizeErrorDetail(errMsg),
               })
 
               // If we already emitted message_start, close the message cleanly so
@@ -4103,6 +4104,7 @@ export function createProxyServer(config: Partial<ProxyConfig> = {}): ProxyServe
           contentBlocks: 0,
           textEvents: 0,
           error: classified.type,
+          errorDetail: summarizeErrorDetail(errMsg),
         })
 
         return new Response(

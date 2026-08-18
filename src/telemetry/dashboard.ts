@@ -354,6 +354,10 @@ function render(s, reqs, logs, sessions) {
   for (const r of reqs) {
     const statusClass = r.error ? 'status-err' : 'status-ok';
     const statusText = r.error ? r.error : r.status;
+    // The classified type names the failure class; the detail is the only thing
+    // on the row that says what actually happened. Hover rather than a column:
+    // upstream text is arbitrarily long and would wreck the table's rhythm.
+    const statusTitle = r.errorDetail ? ' title="' + esc(r.errorDetail) + '"' : '';
     const scale = 280 / maxTotal;
     const qW = Math.max(r.queueWaitMs * scale, 2);
     const ohW = Math.max((r.proxyOverheadMs || 0) * scale, 0);
@@ -373,7 +377,7 @@ function render(s, reqs, logs, sessions) {
       + '<td>' + (r.requestModel || r.model) + '<br><span style="font-size:10px;color:var(--muted)">' + r.model + '</span></td>'
       + '<td>' + r.mode + (r.hasDeferredTools ? (function() { var sessDisc = r.sessionDiscoveredCount || 0; var loaded = ((r.toolCount || 0) - (r.deferredToolCount || 0)) + sessDisc; var deferred = Math.max(0, (r.deferredToolCount || 0) - sessDisc); var newDisc = r.discoveredTools || []; return '<br><span style="font-size:10px;color:var(--purple)">loaded=' + loaded + ' deferred=' + deferred + '</span>' + (newDisc.length > 0 ? '<br><span style="font-size:10px;color:var(--green)">+' + newDisc.join(', +') + '</span>' : ''); })() : '') + '</td>'
       + '<td class="mono">' + sessionShort + ' ' + lineageBadge + envBadge + '<br><span style="font-size:10px;color:var(--muted)">' + msgCount + ' msgs</span></td>'
-      + '<td class="' + statusClass + '">' + statusText + '</td>'
+      + '<td class="' + statusClass + '"' + statusTitle + '>' + statusText + '</td>'
       + '<td class="mono">' + ms(r.queueWaitMs) + '</td>'
       + '<td class="mono">' + ms(r.proxyOverheadMs) + '</td>'
       + '<td class="mono">' + ms(r.ttfbMs) + '</td>'

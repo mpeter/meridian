@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS metrics (
   content_blocks       INTEGER NOT NULL,
   text_events          INTEGER NOT NULL,
   error                TEXT,
+  error_detail         TEXT,
   input_tokens         INTEGER,
   output_tokens        INTEGER,
   cache_read_input_tokens INTEGER,
@@ -57,6 +58,7 @@ const METRICS_MIGRATIONS = [
   "ALTER TABLE metrics ADD COLUMN profile_id TEXT",
   "ALTER TABLE metrics ADD COLUMN envelope_violations TEXT",
   "ALTER TABLE metrics ADD COLUMN client_session_id TEXT",
+  "ALTER TABLE metrics ADD COLUMN error_detail TEXT",
 ]
 
 const LOGS_SCHEMA = `
@@ -106,7 +108,7 @@ class SqliteTelemetryStore implements ITelemetryStore {
         has_deferred_tools, deferred_tool_count, tool_count, discovered_tools, session_discovered_count,
         message_count, sdk_session_id, client_session_id,
         status, queue_wait_ms, proxy_overhead_ms, ttfb_ms,
-        upstream_duration_ms, total_duration_ms, content_blocks, text_events, error,
+        upstream_duration_ms, total_duration_ms, content_blocks, text_events, error, error_detail,
         input_tokens, output_tokens, cache_read_input_tokens,
         cache_creation_input_tokens, cache_hit_rate, profile_id, envelope_violations
       ) VALUES (
@@ -115,7 +117,7 @@ class SqliteTelemetryStore implements ITelemetryStore {
         @hasDeferredTools, @deferredToolCount, @toolCount, @discoveredTools, @sessionDiscoveredCount,
         @messageCount, @sdkSessionId, @clientSessionId,
         @status, @queueWaitMs, @proxyOverheadMs, @ttfbMs,
-        @upstreamDurationMs, @totalDurationMs, @contentBlocks, @textEvents, @error,
+        @upstreamDurationMs, @totalDurationMs, @contentBlocks, @textEvents, @error, @errorDetail,
         @inputTokens, @outputTokens, @cacheReadInputTokens,
         @cacheCreationInputTokens, @cacheHitRate, @profileId, @envelopeViolations
       )
@@ -154,6 +156,7 @@ class SqliteTelemetryStore implements ITelemetryStore {
         contentBlocks: metric.contentBlocks,
         textEvents: metric.textEvents,
         error: metric.error ?? null,
+        errorDetail: metric.errorDetail ?? null,
         inputTokens: metric.inputTokens ?? null,
         outputTokens: metric.outputTokens ?? null,
         cacheReadInputTokens: metric.cacheReadInputTokens ?? null,
@@ -357,6 +360,7 @@ function rowToMetric(r: Record<string, unknown>): RequestMetric {
     contentBlocks: r.content_blocks as number,
     textEvents: r.text_events as number,
     error: (r.error as string) ?? null,
+    errorDetail: (r.error_detail as string) ?? undefined,
     inputTokens: (r.input_tokens as number) ?? undefined,
     outputTokens: (r.output_tokens as number) ?? undefined,
     cacheReadInputTokens: (r.cache_read_input_tokens as number) ?? undefined,
